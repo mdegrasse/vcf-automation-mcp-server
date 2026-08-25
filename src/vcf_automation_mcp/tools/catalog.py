@@ -12,13 +12,31 @@ async def list_catalog_items(
     search: str | None = None,
 ) -> dict[str, Any]:
     """List catalog items (blueprints/templates available to request as deployments),
-    optionally scoped to a project and/or filtered by a name search term."""
-    data = await client.get(
-        Service.CATALOG,
-        "/items",
-        params={"projectId": project_id, "search": search},
-    )
-    return {"items": data.get("content", data), "totalElements": data.get("totalElements")}
+    optionally scoped to a project and/or filtered by a name search term.
+
+    The Catalog API's projectId query parameter does not reliably scope /items results
+    server-side, so when project_id is given this walks the full paginated catalog and
+    filters client-side on each item's projectIds (the projects it's entitled/shared to)."""
+    items: list[dict[str, Any]] = []
+    page = 0
+    size = 100
+    while True:
+        data = await client.get(
+            Service.CATALOG,
+            "/items",
+            params={"projectId": project_id, "search": search, "page": page, "size": size},
+        )
+        page_items = data.get("content", data if isinstance(data, list) else [])
+        items.extend(page_items)
+        total = data.get("totalElements") if isinstance(data, dict) else None
+        if not page_items or total is None or len(items) >= total:
+            break
+        page += 1
+
+    if project_id:
+        items = [item for item in items if project_id in (item.get("projectIds") or [])]
+
+    return {"items": items, "totalElements": len(items)}
 
 
 async def get_catalog_item(client: VCFAClient, item_id: str) -> Any:
